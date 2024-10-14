@@ -102,20 +102,22 @@ if (-not $content.Contains($userParameter)) {
     $newContent += "`r`n" + $userParameter
 }
 
-if (-not $content.Contains($$newInclude )) {
+if (-not $content.Contains($newInclude)) {
     $newContent += "`r`n" + $newInclude 
 }
 
-if ($content.Contains($removeKey))
-    # Удалить строку с $removeKey
+if ($content.Contains($removeKey)) {  # Закрывающая скобка добавлена
     $newContent = $content | Where-Object { $_ -ne $removeKey }
+}
 
 $newContent | Set-Content $configFilePath
 
 # Запуск Zabbix Agent
 
-$agentDirectory\zabbix_agent2.exe --config $configFilePath --install
-#Start-Service -Name "Zabbix Agent" -ErrorAction SilentlyContinue
+Start-Process -FilePath "$agentDirectory\zabbix_agent2.exe" -ArgumentList "-c $configFilePath", "--install"
+
+
+Start-Service -Name "Zabbix Agent 2"
 
 # Удаление временных файлов
 Remove-Item -Path C:\Temp\zabbix* -Recurse -Force
