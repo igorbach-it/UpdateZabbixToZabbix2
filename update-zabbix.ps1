@@ -2,21 +2,20 @@
 
 # Получение пути к службе Zabbix Agent
 $zabbixService = Get-WmiObject win32_service | Where-Object { $_.Name -like '*zabbix*' } | Select-Object -ExpandProperty PathName
+$zabbixServiceName = Get-WmiObject win32_service | Where-Object { $_.Name -like '*zabbix*' } | Select-Object -ExpandProperty Name
 
 # Определение пути к каталогу Zabbix Agent
 if ($zabbixService -ne $null) {
-    # Удаление кавычек и аргументов из строки пути
     $agentPath = $zabbixService -replace '"', '' -replace ' .*', ''
-    # Получение только пути к каталогу
     $agentDirectory = [System.IO.Path]::GetDirectoryName($agentPath)
 } else {
-    Write-Host "$zabbixService не найдена."
+    Write-Host "Zabbix Agent не найден."
     exit
 }
 
 # Поиск файла конфигурации в каталоге службы
-$configFile = Get-ChildItem -Path $agentDirectory -Filter "*.conf" | Where-Object { $_.Name -like "zabbix_agentd*.conf" } | Select-Object -ExpandProperty FullName
-
+$configFile = Get-ChildItem -Path $agentDirectory -Filter "*.conf" | Where-Object { $_.Name -like "zabbix_*.*" } | Select-Object -ExpandProperty FullName
+Write-Host "$configFile"
 # Проверка наличия файла конфигурации
 if ($configFile -ne $null) {
     $configFilePath = $configFile
@@ -25,10 +24,8 @@ if ($configFile -ne $null) {
     exit
 }
 
-# Вывод используемых путей для проверки
-Write-Host "Путь к Zabbix Agent: $agentDirectory"
-Write-Host "Путь к файлу конфигурации: $configFilePath"
-
+# Инициализация $newContent текущим содержимым конфигурационного файла
+$newContent = Get-Content $configFilePath
 
 # Путь к загрузке новой версии Zabbix Agent 6
 $newAgentDownloadURL = "https://cdn.zabbix.com/zabbix/binaries/stable/6.0/6.0.34/zabbix_agent2-6.0.34-windows-amd64-openssl-static.zip"
@@ -40,6 +37,7 @@ $newAgentExtractPath = Join-Path -Path $tempPath -ChildPath "zabbix_agent2"
 if (-not (Test-Path $tempPath)) {
     New-Item -ItemType Directory -Path $tempPath
 }
+
 # Скачивание новой версии Zabbix Agent 6
 Invoke-WebRequest -Uri $newAgentDownloadURL -OutFile $newAgentZipPath
 
@@ -58,17 +56,12 @@ if (-not (Test-Path "$newAgentExtractPath\bin\zabbix_agent2.exe")) {
     exit
 }
 
-# Остановка Zabbix Agent
-#Stop-Service -Name "Zabbix Agent" -ErrorAction SilentlyContinue
-
-sc.exe stop "$zabbixService"
+# Остановка и удаление текущего Zabbix Agent
+sc.exe stop "$zabbixServiceName"
 Start-Sleep -Seconds 5
+sc.exe delete "$zabbixServiceName"
 
-
-sc.exe delete "$zabbixService"
-
-
-# Копирование новой версии Zabbix Agent в каталог назначения
+# Копирование новой версии Zabbix Agent
 $filesToCopy = @("zabbix_agent2.exe", "zabbix_get.exe", "zabbix_sender.exe")
 
 foreach ($file in $filesToCopy) {
@@ -80,44 +73,52 @@ foreach ($file in $filesToCopy) {
     } else {
         Write-Host "Файл $file не найден в каталоге $newAgentExtractPath."
     }
-
 }
-Copy-Item -Path "$newAgentExtractPath\conf\zabbix_agent2.d\*" -Destination $agentDirectory -Recurse -Force
+
+Copy-Item -Path "$newAgentExtractPath\conf\zabbix_agent2.d" -Destination $agentDirectory -Recurse -Force
 Copy-Item -Path ".\mssql.exe" -Destination $agentDirectory -Force
-Copy-Item -Path ".\mssq.conf" -Destination $newAgentExtractPath\conf\zabbix_agent2.d\plugins.d\ -Force
+Copy-Item -Path ".\mssql.conf" -Destination $agentDirectory\zabbix_agent2.d\plugins.d\ -Force
 
-
-
-# Проверка и добавление новых строк в конец файла, если они отсутствуют
-$removeKey = "EnableRemoteCommands=1"
+# Параметры, которые нужно добавить
 $denyKey = "DenyKey=system.run[*]"
-$userParameter = "UserParameter=win.description,powershell -NoProfile -ExecutionPolicy Bypass -Command `"`$desc = (Get-CimInstance -ClassName Win32_OperatingSystem).Description; [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Write-Output `$desc`""
-$newInclude = Include=.\zabbix_agent2.d\plugins.d\*.conf
+$userParameter = "UserParameter=win.description,powershell -NoProfile -ExecutionPolicy Bypass -Command `"`$desc = (Get-CimInstance -ClassName Win32_OperatingSystem).Description; [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Write-Output `$desc`"" 
+$newInclude = "Include=.\zabbix_agent2.d\plugins.d\*.conf"
 
-if (-not $content.Contains($denyKey)) {
+# Удаление устаревшего параметра EnableRemoteCommands, если он есть
+$removeKey = "EnableRemoteCommands=1 "
+if ($newContent.Contains($removeKey)) {
+    $newContent = $newContent | Where-Object { $_ -ne $removeKey }
+    Write-Host "Удалён устаревший параметр EnableRemoteCommands"
+}
+
+# Добавление параметра DenyKey, если его нет
+if (-not $newContent.Contains($denyKey)) {
     $newContent += "`r`n" + $denyKey
+    Write-Host "Добавлен параметр DenyKey"
 }
 
-if (-not $content.Contains($userParameter)) {
+# Добавление параметра UserParameter, если его нет
+if (-not $newContent.Contains($userParameter)) {
     $newContent += "`r`n" + $userParameter
+    Write-Host "Добавлен параметр UserParameter"
 }
 
-if (-not $content.Contains($newInclude)) {
-    $newContent += "`r`n" + $newInclude 
+# Добавление строки Include для плагинов, если её нет
+if (-not $newContent.Contains($newInclude)) {
+    $newContent += "`r`n" + $newInclude
+    Write-Host "Добавлен параметр Include для плагинов"
 }
 
-if ($content.Contains($removeKey)) {  # Закрывающая скобка добавлена
-    $newContent = $content | Where-Object { $_ -ne $removeKey }
-}
-
+# Сохранение обновленного файла конфигурации
 $newContent | Set-Content $configFilePath
 
+
 # Запуск Zabbix Agent
-
-Start-Process -FilePath "$agentDirectory\zabbix_agent2.exe" -ArgumentList "-c $configFilePath", "--install"
-
+& "$agentDirectory\zabbix_agent2.exe" -c "$configFile" --install
 
 Start-Service -Name "Zabbix Agent 2"
 
 # Удаление временных файлов
-Remove-Item -Path C:\Temp\zabbix* -Recurse -Force
+if (Test-Path "C:\Temp\zabbix*") {
+    Remove-Item -Path C:\Temp\zabbix* -Recurse -Force
+}
