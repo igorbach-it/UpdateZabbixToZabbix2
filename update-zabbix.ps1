@@ -76,8 +76,8 @@ foreach ($file in $filesToCopy) {
 }
 
 Copy-Item -Path "$newAgentExtractPath\conf\zabbix_agent2.d" -Destination $agentDirectory -Recurse -Force
-Copy-Item -Path ".\mssql.exe" -Destination $agentDirectory -Force
-Copy-Item -Path ".\mssql.conf" -Destination $agentDirectory\zabbix_agent2.d\plugins.d\ -Force
+Copy-Item -Path "$PSScriptRoot\mssql.exe" -Destination $agentDirectory -Force
+Copy-Item -Path "$PSScriptRoot\mssql.conf" -Destination $agentDirectory\zabbix_agent2.d\plugins.d\ -Force
 
 # Параметры, которые нужно добавить
 $denyKey = "DenyKey=system.run[*]"
